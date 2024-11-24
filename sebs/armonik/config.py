@@ -19,6 +19,10 @@ class ArmoniKResources(Resources):
         super().__init__(name="armonik")
         self._control_plane_url = control_plane_url
 
+    @property
+    def control_plane_url(self):
+        return self._control_plane_url
+
     def serialize(self) -> dict:
         return {"control_plane_url": self._control_plane_url}
 
