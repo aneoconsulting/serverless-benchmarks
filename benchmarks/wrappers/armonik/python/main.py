@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 
 from datetime import datetime
@@ -41,7 +42,7 @@ def processor(task_handler: TaskHandler) -> Output:
                     NotifyResultDataRequest.ResultIdentifier(
                     session_id=task_handler.session_id, result_id=blod_id
                 )
-                for blod_id in task_handler.expected_results
+                for blod_id in set(task_handler.expected_results) - {name_id_mapping["response_body"]}
             ],
             communication_token=task_handler.token,
         ))

@@ -1,6 +1,6 @@
 {
   "general": {
-    "docker_repository": "spcleth/serverless-benchmarks"
+    "docker_repository": "qdelamea/serverless-benchmarks"
   },
   "local": {
     "experiments": {
@@ -275,6 +275,34 @@
           ],
           "packages": {
             "minio": "7.0.16"
+          }
+        }
+      }
+    },
+    "architecture": ["x64"],
+    "deployments": ["container"]
+  },
+  "armonik": {
+    "languages": {
+      "python": {
+        "base_images": {
+          "x64": {
+            "3.10": "python:3.10-slim"
+          }
+        },
+        "images": [
+          "function"
+        ],
+        "username": "docker_user",
+        "deployment": {
+          "files": [
+            "__init__.py",
+            "main.py",
+            "storage.py",
+            "handler.py"
+          ],
+          "packages": {
+            "armonik": ""
           }
         }
       }

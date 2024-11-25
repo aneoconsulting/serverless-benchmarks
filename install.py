@@ -7,7 +7,7 @@ import subprocess
 parser = argparse.ArgumentParser(description="Install SeBS and dependencies.")
 parser.add_argument('--venv', metavar='DIR', type=str, default="python-venv", help='destination of local Python virtual environment')
 parser.add_argument('--python-path', metavar='DIR', type=str, default="python3", help='Path to local Python installation.')
-for deployment in ["aws", "azure", "gcp", "openwhisk"]:
+for deployment in ["aws", "azure", "gcp", "openwhisk", "armonik"]:
     parser.add_argument(f"--{deployment}", action="store_const", const=True, default=True, dest=deployment)
     parser.add_argument(f"--no-{deployment}", action="store_const", const=False, default=True, dest=deployment)
 for deployment in ["local"]:
@@ -51,6 +51,13 @@ if args.azure:
 flag = "TRUE" if args.azure else "FALSE"
 execute(f'echo "export SEBS_WITH_AZURE={flag}" >> {env_dir}/bin/activate')
 execute(f'echo "unset SEBS_WITH_AZURE" >> {env_dir}/bin/deactivate')
+
+if args.armonik:
+    print("Install Python dependencies for ArmoniK")
+    execute(". {}/bin/activate && pip3 install -r requirements.armonik.txt".format(env_dir))
+flag = "TRUE" if args.armonik else "FALSE"
+execute(f'echo "export SEBS_WITH_ARMONIK={flag}" >> {env_dir}/bin/activate')
+execute(f'echo "unset SEBS_WITH_ARMONIK" >> {env_dir}/bin/deactivate')
 
 if args.gcp:
     print("Install Python dependencies for GCP")

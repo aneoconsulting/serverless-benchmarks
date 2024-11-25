@@ -1,23 +1,31 @@
 {
   "experiments": {
-    "deployment": "armonik",
+    "deployment": "aws",
     "update_code": false,
-    "update_storage": true,
-    "download_results": true,
-    "architecture": "x64", 
+    "update_storage": false,
+    "download_results": false,
+    "architecture": "arm64",
     "container_deployment": true,
     "runtime": {
       "language": "python",
-      "version": "3.10"
+      "version": "3.8"
     },
     "type": "invocation-overhead",
     "perf-cost": {
       "benchmark": "110.dynamic-html",
-      "experiments": ["cold", "warm", "burst", "sequential"],
+      "experiments": [
+        "cold",
+        "warm",
+        "burst",
+        "sequential"
+      ],
       "input-size": "test",
       "repetitions": 50,
       "concurrent-invocations": 50,
-      "memory-sizes": [128, 256]
+      "memory-sizes": [
+        128,
+        256
+      ]
     },
     "network-ping-pong": {
       "invocations": 50,
@@ -43,7 +51,7 @@
     }
   },
   "deployment": {
-    "name": "armonik",
+    "name": "aws",
     "aws": {
       "region": "us-east-1",
       "lambda-role": ""
@@ -58,13 +66,13 @@
     },
     "local": {
       "storage": {
-        "address": "",
-        "mapped_port": -1,
-        "access_key": "",
-        "secret_key": "",
-        "instance_id": "",
-        "input_buckets": [],
+        "address": "localhost:9011",
+        "mapped_port": 9011,
+        "access_key": "jgQxTERUR9RfbR1g9NAQBfNB8D9WtQP5Mkp0n0e2_z8",
+        "secret_key": "5c9d3335dc9da963cedfdd1c4b19f575af7db6007676a629cfeeee576222cdea",
+        "instance_id": "0608cb3488479b39cbb1bcba0cf05a022b832cb3ba598075d10ef5b5eb91e823",
         "output_buckets": [],
+        "input_buckets": [],
         "type": "minio"
       }
     },
@@ -90,8 +98,7 @@
         "type": "minio"
       }
     },
-    "armonik": {
-      "control_plane_url": "http://172.17.119.85:5001"
-    }
+    "architecture": ["x64"],
+    "deployments": ["container"]  
   }
 }

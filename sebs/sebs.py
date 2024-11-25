@@ -105,6 +105,10 @@ class SeBS(LoggingBase):
             from sebs.openwhisk import OpenWhisk
 
             implementations["openwhisk"] = OpenWhisk
+        if has_platform("armonik"):
+            from sebs.armonik import ArmoniK
+
+            implementations["armonik"] = ArmoniK
 
         if name not in implementations:
             raise RuntimeError("Deployment {name} not supported!".format(name=name))
