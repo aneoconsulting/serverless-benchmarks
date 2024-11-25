@@ -71,7 +71,7 @@ class ArmoniKStorage(PersistentStorage):
             filepath: local destination filepath
         """
         total, results = self._result_client.list_results(
-            result_filter=(Result.name == self._get_name_or_prefix(bucket_name, key) and (Result.status == ResultStatus.COMPLETED)),
+            result_filter=(Result.name == self._get_name_or_prefix(bucket_name, key) + (Result.status == ResultStatus.COMPLETED)),
             page=0,
             page_size=5,
             sort_field=Result.completed_at,
@@ -121,7 +121,7 @@ class ArmoniKStorage(PersistentStorage):
         objects = set()
         page = 0
         list_args = {
-            "result_filter": Result.name.startswith(self._get_name_or_prefix(bucket_name, prefix)) and Result.status == ResultStatus.COMPLETED,
+            "result_filter": Result.name.startswith(self._get_name_or_prefix(bucket_name, prefix)) and (Result.status == ResultStatus.COMPLETED),
             "page": page,
             "sort_field": Result.result_id,
             "sort_direction": Direction.ASC,
@@ -158,7 +158,7 @@ class ArmoniKStorage(PersistentStorage):
 
     def exists_bucket(self, bucket_name: str) -> bool:
         total, _ = self._result_client.list_results(
-            result_filter=Result.name.startswith(self._get_name_or_prefix(bucket_name)) and Result.status == ResultStatus.COMPLETED,
+            result_filter=Result.name.startswith(self._get_name_or_prefix(bucket_name)) + (Result.status == ResultStatus.COMPLETED),
             page=0,
             page_size=1,
             sort_field=Result.result_id,
@@ -175,7 +175,7 @@ class ArmoniKStorage(PersistentStorage):
         page = 0
         page_size = 100
         list_args = {
-            "result_filter": Result.name.startswith(self._get_name_or_prefix(bucket_name)) and Result.status == ResultStatus.COMPLETED,
+            "result_filter": Result.name.startswith(self._get_name_or_prefix(bucket_name)) + (Result.status == ResultStatus.COMPLETED),
             "page": page,
             "page_size": page_size,
             "sort_field": Result.result_id,

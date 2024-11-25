@@ -12,7 +12,7 @@ class SingletonMeta(type):
         _lock: A threading lock to ensure thread-safe access to the Singleton instance.
     """
 
-    _instance: object = None.
+    _instance: object = None
     _lock: Lock = Lock()
 
     def __call__(cls, *args, **kwargs) -> object:
