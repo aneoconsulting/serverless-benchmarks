@@ -1,0 +1,10 @@
+{
+  "address": "localhost:9011",
+  "mapped_port": 9011,
+  "access_key": "jgQxTERUR9RfbR1g9NAQBfNB8D9WtQP5Mkp0n0e2_z8",
+  "secret_key": "5c9d3335dc9da963cedfdd1c4b19f575af7db6007676a629cfeeee576222cdea",
+  "instance_id": "0608cb3488479b39cbb1bcba0cf05a022b832cb3ba598075d10ef5b5eb91e823",
+  "output_buckets": [],
+  "input_buckets": [],
+  "type": "minio"
+}
