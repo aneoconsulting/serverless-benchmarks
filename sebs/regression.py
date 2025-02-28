@@ -39,6 +39,9 @@ deployments_azure = ["package"]
 architectures_openwhisk = ["x64"]
 deployments_openwhisk = ["container"]
 
+architectures_armonik = ["x64"]
+deployments_armonik = ["container"]
+
 # user-defined config passed during initialization
 cloud_config: Optional[dict] = None
 
@@ -341,6 +344,30 @@ class OpenWhiskTestSequencePython(
         return deployment_client
 
 
+class ArmoniKTestSequencePython(
+    unittest.TestCase,
+    metaclass=TestSequenceMeta,
+    benchmarks=benchmarks_python,
+    architectures=architectures_armonik,
+    deployments=deployments_armonik,
+    deployment_name="armonik",
+    triggers=[Trigger.TriggerType.LIBRARY],
+):
+    def get_deployment(self, benchmark_name, architecture):
+        deployment_name = "armonik"
+        assert cloud_config
+        deployment_client = self.client.get_deployment(
+            cloud_config,
+            logging_filename=os.path.join(
+                self.client.output_dir,
+                f"regression_{deployment_name}_{benchmark_name}_{architecture}.log"
+            ),
+        )
+        with ArmoniKTestSequencePython.lock:
+            deployment_client.initialize(resource_prefix="regression")
+        return deployment_client
+
+
 class OpenWhiskTestSequenceNodejs(
     unittest.TestCase,
     metaclass=TestSequenceMeta,
@@ -459,6 +486,14 @@ def regression_suite(
             suite.addTest(
                 unittest.defaultTestLoader.loadTestsFromTestCase(OpenWhiskTestSequenceNodejs)
             )
+    if "armonik" in providers:
+        assert "armonik" in cloud_config["deployment"]
+        if language == "python":
+            suite.addTest(
+                unittest.defaultTestLoader.loadTestsFromTestCase(ArmoniKTestSequencePython)
+            )
+        else:
+            raise ValueError(f"Unsupported language for regression tests {language}.")
 
     tests = []
     # mypy is confused here

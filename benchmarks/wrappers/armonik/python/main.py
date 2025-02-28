@@ -30,8 +30,8 @@ def processor(task_handler: TaskHandler) -> Output:
     logger.debug(f"Request body: {req_json}.")
 
     # Instantiates the storage interface
-    blob_ids = {tuple(k.split("/")): v for k, v in name_id_mapping.items() if k not in ["request_body", "response_body"]}
-    blob_locs = {blob_id: os.path.join(task_handler.data_folder, blob_id) for blob_id in blob_ids.keys()}
+    blob_ids = {tuple(k.split(",")): v for k, v in name_id_mapping["blobs"].items()}
+    blob_locs = {blob_id: os.path.join(task_handler.data_folder, blob_id) for blob_id in blob_ids.values()}
     storage.storage(blob_ids=blob_ids, blob_locs=blob_locs)
 
     error_msg = ""
@@ -42,7 +42,7 @@ def processor(task_handler: TaskHandler) -> Output:
                     NotifyResultDataRequest.ResultIdentifier(
                     session_id=task_handler.session_id, result_id=blod_id
                 )
-                for blod_id in set(task_handler.expected_results) - {name_id_mapping["response_body"]}
+                for blod_id in blob_ids.values()
             ],
             communication_token=task_handler.token,
         ))
