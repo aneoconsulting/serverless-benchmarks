@@ -1,7 +1,7 @@
 {
   "experiments": {
-    "deployment": "armonik",
-    "update_code": false,
+    "deployment": "local",
+    "update_code": true,
     "update_storage": true,
     "download_results": true,
     "architecture": "x64", 

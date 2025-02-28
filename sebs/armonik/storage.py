@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from armonik.client import ArmoniKResults
 from armonik.common import Result, Direction, ResultStatus
+from grpc import RpcError
 
 from sebs.cache import Cache
 from sebs.faas.config import Resources
@@ -25,6 +26,7 @@ class ArmoniKStorage(PersistentStorage):
         super().__init__(region="", cache_client=cache_client, resources=resources, replace_existing=replace_existing)
         self._result_client = result_client
         self._session_id = session_id
+        self.result_ids = {}
 
     def correct_name(self, name: str) -> str:
         return name
@@ -37,10 +39,6 @@ class ArmoniKStorage(PersistentStorage):
         if prefix:
             return name + prefix
         return name
-
-    @staticmethod
-    def _get_bucket_from_name(result_name: str) -> str:
-        return result_name.split(",")[0].removeprefix("bucket=")
 
     def _create_bucket(
         self, name: str, buckets: List[str] = [], randomize_name: bool = False
@@ -58,9 +56,9 @@ class ArmoniKStorage(PersistentStorage):
         else:
             bucket_name = name
 
+        self.result_ids[bucket_name] = {}
         self.logging.info("Created bucket {}".format(bucket_name))
         return bucket_name
-
 
     def download(self, bucket_name: str, key: str, filepath: str) -> None:
         """Download a file from a bucket.
@@ -70,21 +68,16 @@ class ArmoniKStorage(PersistentStorage):
             key: storage source filepath
             filepath: local destination filepath
         """
-        total, results = self._result_client.list_results(
-            result_filter=(Result.name == self._get_name_or_prefix(bucket_name, key) + (Result.status == ResultStatus.COMPLETED)),
-            page=0,
-            page_size=5,
-            sort_field=Result.completed_at,
-            sort_direction=Direction.DESC,
-        )
-        if total == 0:
-            raise ValueError(f"Object {key} from bucket {bucket_name} not found. No corresponding result.")
-        if total > 1:
-            self.logging.warning(f"Found {total} versions of the object {key} for bucket {bucket_name}. Use the most recently completed one.")
-        self.logging.info(f"Object {key} from bucket {bucket_name} corresponds to result with id {results[0].result_id}.")
+        if bucket_name not in self.result_ids:
+            raise RuntimeError(f"Attempt to download an object from a non-existing bucket: {bucket_name}.")
+        if key not in self.result_ids[bucket_name]:
+            raise RuntimeError(f"Object {key} not found in bucket {bucket_name}.")
+        result_id = self.result_ids[bucket_name][key]
+        if self._result_client.get_result(result_id=result_id).status != ResultStatus.COMPLETED:
+            raise RuntimeError(f"Object {key} in bucket {bucket_name} corresponds to result {result_id} that is empty.")
         with open(filepath, "wb") as file:
             file.write(self._result_client.download_result_data(
-                result_id=results[0].result_id,
+                result_id=result_id,
                 session_id=self._session_id,
             ))
             self.logging.info(f"Downloaded object {key} from bucket {bucket_name}.")
@@ -98,16 +91,34 @@ class ArmoniKStorage(PersistentStorage):
             filepath: local source filepath
             key: storage destination filepath
         """
+        if bucket_name not in self.result_ids:
+            raise ValueError(f"Attempt to upload a file into an non-existing bucket: {bucket_name}.")
         result_name = self._get_name_or_prefix(bucket_name, key)
-        result = self._result_client.create_results_metadata([result_name], self._session_id).values()[result_name]
-        self.logging.info(f"Created result {result.result_id} for object {key} in bucket {bucket_name}.")
+        result_id = self._result_client.create_results_metadata([result_name], self._session_id)[result_name].result_id
+        self.result_ids[bucket_name][key] = result_id
+        self.logging.info(f"Created result {result_id} for object {key} in bucket {bucket_name}.")
         with open(filepath, "rb") as file:
             self._result_client.upload_result_data(
                 result_data=file.read(),
-                result_id=result.result_id,
+                result_id=result_id,
                 session_id=self._session_id,
             )
             self.logging.info(f"Uploaded object {key} to bucket {bucket_name}.")
+
+    def create_empty_object(self, bucket_name: str, key: str):
+        """Create an empty result corresponding to an object to be created by a function invocation.
+        Required for ArmoniK to invoke the function.
+
+        Args:
+            bucket_name:
+            key: storage destination filepath
+        """
+        if bucket_name not in self.result_ids:
+            raise ValueError(f"Attempt to upload a file into an non-existing bucket: {bucket_name}.")
+        result_name = self._get_name_or_prefix(bucket_name, key)
+        result_id = self._result_client.create_results_metadata([result_name], self._session_id)[result_name].result_id
+        self.result_ids[bucket_name][key] = result_id
+        self.logging.info(f"Created result {result_id} for object {key} in bucket {bucket_name}.")
 
     def list_bucket(self, bucket_name: str, prefix: str = "") -> List[str]:
         """Retrieves list of files in a bucket.
@@ -118,89 +129,52 @@ class ArmoniKStorage(PersistentStorage):
         Return:
             list of files in a given bucket
         """
-        objects = set()
-        page = 0
-        list_args = {
-            "result_filter": Result.name.startswith(self._get_name_or_prefix(bucket_name, prefix)) and (Result.status == ResultStatus.COMPLETED),
-            "page": page,
-            "sort_field": Result.result_id,
-            "sort_direction": Direction.ASC,
-        }
-        total, results = self._result_client.list_results(**list_args)
-        if total == 0:
-            self.logging.warning(f"No object found in bucket {bucket_name} for prefix {prefix}.")
-            return []
-        while results:
-            objects.union([r.name for r in results])
-            page += 1
-            _, results = self._result_client.list_results(**list_args)
+        if bucket_name in self.result_ids:
+            objects = [*self.result_ids[bucket_name].keys()]
+        else:
+            objects = []
         self.logging.info(f"Found {len(objects)} in bucket {bucket_name} for prefix {prefix}.")
         return objects
 
     def list_buckets(self, bucket_name: Optional[str] = None) -> List[str]:
-        buckets = set()
-        page = 0
-        total, results = self._result_client.list_results(result_filter=Result.status == ResultStatus.COMPLETED, page=page)
-        if total == 0:
-            self.logging.warning("No bucket exists.")
-            return []
-        while results:
-            for result in results:
-                buckets.add(self._get_bucket_from_name(result.name))
-            page += 1
-            _, results = self._result_client.list_results(page=page)
+        buckets = [*self.result_ids.keys()]
         if bucket_name is not None:
             buckets = [bucket for bucket in buckets if bucket_name in bucket]
-        else:
-            buckets = list(buckets)
         self.logging.info(f"Found {len(buckets)} buckets.")
         return buckets
 
     def exists_bucket(self, bucket_name: str) -> bool:
-        total, _ = self._result_client.list_results(
-            result_filter=Result.name.startswith(self._get_name_or_prefix(bucket_name)) + (Result.status == ResultStatus.COMPLETED),
-            page=0,
-            page_size=1,
-            sort_field=Result.result_id,
-            sort_direction=Direction.ASC,
-        )
-        if total > 0:
+        if bucket_name in self.result_ids:
             self.logging.info(f"Bucket {bucket_name} exists.")
             return True
         self.logging.info(f"Bucket {bucket_name} doesn't exist.")
         return False
 
     def clean_bucket(self, bucket_name: str):
-        n_deletion = 0
-        page = 0
-        page_size = 100
-        list_args = {
-            "result_filter": Result.name.startswith(self._get_name_or_prefix(bucket_name)) + (Result.status == ResultStatus.COMPLETED),
-            "page": page,
-            "page_size": page_size,
-            "sort_field": Result.result_id,
-            "sort_direction": Direction.ASC,
-        }
-        total, results = self._result_client.list_results(**list_args)
-        if total == 0:
-            self.logging.warning(f"No object found in bucket {bucket_name}.")
-            return []
-        while results:
-            self._result_client.delete_result_data(
-                result_ids=[r.result_id for r in results],
-                session_id=self._session_id,
-                batch_size=page_size,
-            )
-            n_deletion += len(results)
-            page += 1
-            _, results = self._result_client.list_results(**list_args)
-        self.logging.info(f"Delete {n_deletion} objects from bucket {bucket_name}.")
+        if bucket_name in self.result_ids:
+            n_deletion = len(self.result_ids[bucket_name])
+            if n_deletion > 0:
+                self._result_client.delete_result_data(
+                    result_ids=[*self.result_ids[bucket_name].values()],
+                    session_id=self._session_id,
+                    batch_size=100,
+                )
+                self.result_ids[bucket_name] = {}
+                self.logging.info(f"Delete {n_deletion} objects from bucket {bucket_name}.")
+            else:
+                self.logging.warning(f"Attempt to clean an empty bucket: {bucket_name}.")
+        else:
+            self.logging.warning(f"Attempt to clean a non-existent bucket: {bucket_name}.")
 
     def remove_bucket(self, bucket: str):
-        self.clean_bucket(bucket)
-        self.logging.info(f"Removed bucket {bucket}.")
+        if bucket in self.result_ids:
+            self.clean_bucket(bucket)
+            del self.result_ids[bucket]
+            self.logging.info(f"Removed bucket {bucket}.")
+        else:
+            self.logging.warning(f"Attempt to delete a non-existent bucket: {bucket}.")
 
-    def uploader_func(self, bucket_idx: int, file: str, filepath: str) -> None:
+    def uploader_func(self, path_idx: int, key: str, filepath: str) -> None:
         """Implements a handy routine for uploading input data by benchmarks.
         It should skip uploading existing files unless storage client has been
         initialized to override existing data.
@@ -210,4 +184,6 @@ class ArmoniKStorage(PersistentStorage):
             file: name of file to upload
             filepath: filepath in the storage
         """
-        raise NotImplementedError("ArmoniK platform only support function deployment through container image.")
+        key = os.path.join(self.input_prefixes[path_idx], key)
+        bucket_name = self.get_bucket(Resources.StorageBucketType.BENCHMARKS)
+        self.upload(bucket_name, filepath, key)

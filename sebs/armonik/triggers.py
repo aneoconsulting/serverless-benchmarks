@@ -40,21 +40,39 @@ class LibraryTrigger(Trigger):
         result_client: ArmoniKResults = self.deployment_client.get_result_client()
         event_client: ArmoniKEvents = self.deployment_client.get_event_client()
         session_id = self.deployment_client.get_session_id()
+        storage_client = self.deployment_client.storage
 
         self.logging.info(f"Function invoked within session {session_id}.")
         self.logging.info(f"Using partition {self.deployment_client.get_function_partition(self.name)}.")
         task_options = TaskOptions(partition_id=self.deployment_client.get_function_partition(self.name), max_retries=1, max_duration=datetime.timedelta(minutes=10), priority=1)
 
+        # TODO:
+        # - create separate function to extract input/output from payload if there is some
+        # - add input/output to data dependencies and expected output ids
+        # - clean-up the code
+
+        input_blobs, output_blobs = self._get_blobs_from_payload(payload)
+
         request_body = result_client.create_results(results_data={"request_body": json.dumps(payload).encode("utf-8")}, session_id=session_id)["request_body"]
         response_body = result_client.create_results_metadata(result_names=["response_body"], session_id=session_id)["response_body"]
-        task_payload = result_client.create_results(results_data={"payload": json.dumps({"request_body": request_body.result_id, "response_body": response_body.result_id}).encode("utf-8")}, session_id=session_id)["payload"]
+        task_payload = result_client.create_results(
+            results_data={
+                "payload": json.dumps({
+                    "request_body": request_body.result_id,
+                    "response_body": response_body.result_id,
+                    "blobs": {
+                        f"{bucket},{blob}": storage_client.result_ids[bucket][blob]
+                        for bucket, blob in input_blobs + output_blobs
+                    }
+                }).encode("utf-8")},
+            session_id=session_id)["payload"]
         begin = datetime.datetime.now()
         func_task = task_client.submit_tasks(
             session_id=session_id,
             tasks=[TaskDefinition(
                 payload_id=task_payload.result_id,
-                data_dependencies=[request_body.result_id],
-                expected_output_ids=[response_body.result_id],
+                data_dependencies=[request_body.result_id] + [storage_client.result_ids[bucket][blob] for bucket, blob in input_blobs] if input_blobs else [],
+                expected_output_ids=[response_body.result_id] + [storage_client.result_ids[bucket][blob] for bucket, blob in output_blobs] if output_blobs else [],
                 options=task_options,
             )],
         )[0]
@@ -89,3 +107,11 @@ class LibraryTrigger(Trigger):
     @staticmethod
     def deserialize(obj: dict) -> Trigger:
         return LibraryTrigger(obj["name"])
+
+    @staticmethod
+    def _get_blobs_from_payload(storage_client, payload: dict) -> Tuple[List[Tuple[str, str]],List[Tuple[str, str]]]:
+        bucket = payload["bucket"]["bucket"]
+        input_blob = f"{payload['bucket']['input']}/{payload['object']['key']}"
+        output_blob = f"{payload['bucket']['output']}/{payload['object']['key']}"
+        storage_client.create_empty_object(bucket, output_blob)
+        return [bucket, input_blob], [bucket, output_blob]
