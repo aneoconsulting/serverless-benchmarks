@@ -15,16 +15,35 @@ class ArmoniKCredentials(Credentials):
 
 
 class ArmoniKResources(Resources):
-    def __init__(self, control_plane_url: Optional[str] = None):
+    def __init__(
+            self,
+            control_plane_url: Optional[str] = None,
+            repo_path: Optional[str] = None,
+            env: Optional[str] = None,
+        ):
         super().__init__(name="armonik")
         self._control_plane_url = control_plane_url
+        self._repo_path = repo_path
+        self._env = env
 
     @property
     def control_plane_url(self):
         return self._control_plane_url
 
+    @property
+    def repo_path(self):
+        return self._repo_path
+
+    @property
+    def env(self):
+        return self._env
+
     def serialize(self) -> dict:
-        return {"control_plane_url": self._control_plane_url}
+        return {
+            "control_plane_url": self.control_plane_url,
+            "repo_path": self.repo_path,
+            "env": self.env,
+        }
 
     @staticmethod
     def initialize(res: Resources, config: dict):
@@ -32,11 +51,21 @@ class ArmoniKResources(Resources):
         # Check for new config
         if "control_plane_url" in config:
             resources._control_plane_url = config["control_plane_url"]
+        if "repo_path" in config:
+            resources._repo_path = config["repo_path"]
+        if "env" in config:
+            resources._env = config["env"]
 
     def update_cache(self, cache: Cache):
         super().update_cache(cache)
         cache.update_config(
             val=self._control_plane_url, keys=["armonik", "resources", "control_plane_url"]
+        )
+        cache.update_config(
+            val=self._repo_path, keys=["armonik", "resources", "repo_path"]
+        )
+        cache.update_config(
+            val=self._env, keys=["armonik", "resources", "env"]
         )
 
     @staticmethod

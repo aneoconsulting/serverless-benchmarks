@@ -1,15 +1,18 @@
+import json
 import os
 import subprocess
-from typing import cast, Dict, List, Optional, Type, Tuple  # noqa
+import sys
 
 import docker
+import hcl2
 
 from datetime import timedelta
+from typing import cast, Dict, List, Optional, Type, Tuple  # noqa
 
 from armonik.client import ArmoniKPartitions, ArmoniKResults, ArmoniKSessions, ArmoniKTasks, ArmoniKEvents
 from armonik.common import TaskOptions
 from armonik.common.channel import create_channel
-from grpc import RpcError
+from grpc import Channel
 
 from sebs.cache import Cache
 from sebs.config import SeBSConfig
@@ -17,7 +20,7 @@ from sebs.utils import LoggingHandlers
 from sebs.armonik.config import ArmoniKConfig
 from sebs.armonik.storage import ArmoniKStorage
 from sebs.armonik.container import ArmoniKContainer
-from sebs.armonik.function import ArmoniKFunction
+from sebs.armonik.function import ArmoniKFunction, ArmoniKFunctionConfig
 from sebs.faas.container import DockerContainer
 from sebs.faas.function import Function, FunctionConfig, ExecutionResult, Trigger
 from sebs.faas.storage import PersistentStorage
@@ -58,14 +61,16 @@ class ArmoniK(System):
         self._config = config
         self.storage: Optional[ArmoniKStorage] = None
         self.container_client = ArmoniKContainer(self.system_config, self.docker_client)
+        self.channel: Optional[Channel] = None
 
     def initialize(self, config: Dict[str, str] = {}, resource_prefix: Optional[str] = None):
-        channel = create_channel(self.config.resources.control_plane_url).__enter__()
-        self.partition_client = ArmoniKPartitions(channel)
-        self.result_client = ArmoniKResults(channel)
-        self.task_client = ArmoniKTasks(channel)
-        self.session_client = ArmoniKSessions(channel)
-        self.event_client = ArmoniKEvents(channel)
+        self.channel = create_channel(self.config.resources.control_plane_url)
+        self.channel.__enter__()
+        self.partition_client = ArmoniKPartitions(self.channel)
+        self.result_client = ArmoniKResults(self.channel)
+        self.task_client = ArmoniKTasks(self.channel)
+        self.session_client = ArmoniKSessions(self.channel)
+        self.event_client = ArmoniKEvents(self.channel)
         self.session_id = self.session_client.create_session(
             default_task_options=TaskOptions(
                 max_duration=timedelta(minutes=5),
@@ -75,18 +80,6 @@ class ArmoniK(System):
             partition_ids=["default"]
         )
         self.initialize_resources(select_prefix=resource_prefix)
-
-    def get_task_client(self):
-        return self.task_client
-
-    def get_result_client(self):
-        return self.result_client
-
-    def get_event_client(self):
-        return self.event_client
-
-    def get_session_id(self):
-        return self.session_id
 
     def package_code(
         self,
@@ -98,7 +91,8 @@ class ArmoniK(System):
         is_cached: bool,
         container_deployment: bool,
     ) -> Tuple[str, int, str]:
-
+        if not container_deployment:
+            raise ValueError("ArmoniK only support container deployments.")
         _, image_uri = self.container_client.build_base_image(
             directory, language_name, language_version, architecture, benchmark, is_cached
         )
@@ -119,20 +113,55 @@ class ArmoniK(System):
         container_deployment: bool,
         container_uri: str,
     ) -> "ArmoniKFunction":
-        try:
-            self.partition_client.get_partition(self.get_function_partition(func_name))
-            function = ArmoniKFunction(
-                code_package.benchmark,
-                func_name,
-                code_package.hash,
-                FunctionConfig.from_benchmark(code_package)
-            )
-            return function
-        except RpcError:
-            raise ValueError(f"Function {func_name} cannot be created from SEBS and doesn't exist in the cluster.")
+        if not container_deployment:
+            raise ValueError("ArmoniK support only container deployments.")
+        
+        repository, tag = container_uri.split(":")
 
-    def get_function_partition(self, func_name: str) -> str:
-        return func_name.replace(".", "-")
+        function_cfg = ArmoniKFunctionConfig.from_benchmark(code_package)
+        function_cfg.docker_image = repository
+        function_cfg.docker_tag = tag
+        function = ArmoniKFunction(
+            func_name, code_package.benchmark, code_package.hash, function_cfg
+        )
+
+        cmd_path = os.path.join(
+            self.config.resources.repo_path,
+            f"infrastructure/quick-deploy/{self.config.resources.env}"
+        )
+
+        self.logging.info("Updating deployment configuration.")
+        with open(os.path.join(cmd_path, "parameters.tfvars"), "r") as file:
+            config = hcl2.load(file)
+            config["compute_plane"][function.name] = function.full_spec
+
+        with open(os.path.join(cmd_path, "parameters.tfvars"), "r+") as file:
+                file.write(hcl2.writes(hcl2.reverse_transform(config)))
+
+        self.logging.info("Updating ArmoniK deployment.")
+        try:
+            subprocess.run(
+                ["make"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
+                cwd=cmd_path,
+            )
+            self.logging.info("Successfully updated cluster deployment.")
+            with open(os.path.join(
+                self.config.resources.repo_path,
+                f"infrastructure/quick-deploy/{self.config.resources.env}/generated/armonik-output.json"
+            ), "r") as file:
+                self.config._control_plane_url = json.loads(file.read())["armonik"]["control_plane_url"]
+        except subprocess.CalledProcessError as e:
+            import pdb; pdb.set_trace()
+            self.logging.error("Error executing makefile:", file=sys.stderr)
+            self.logging.error(e.stdout, file=sys.stderr)
+            self.logging.error(e.stderr, file=sys.stderr)
+            raise RuntimeError("ArmoniK update deployment failed") from e
+
+        return function
 
     def update_function(
         self,
@@ -141,17 +170,15 @@ class ArmoniK(System):
         container_deployment: bool,
         container_uri: str,
     ):
-        # raise NotImplementedError("ArmoniK platform doesn't support function update.")
-        pass
+        self.create_function(code_package, function.name, container_deployment, container_uri)
 
     def create_trigger(self, func: Function, trigger_type: Trigger.TriggerType) -> Trigger:
         from sebs.armonik.triggers import LibraryTrigger
 
         function = cast(ArmoniKFunction, func)
-        trigger = LibraryTrigger(function.name, self)
+        trigger = LibraryTrigger(function.name, function.config.timeout, self)
         trigger.logging_handlers = self.logging_handlers
         function.add_trigger(trigger)
-        # self.cache_client.update_function(function)
         return trigger
 
     def cached_function(self, function: Function):
@@ -164,9 +191,7 @@ class ArmoniK(System):
             trigger.logging_handlers = self.logging_handlers
 
     def update_function_configuration(self, function: Function, code_package: Benchmark):
-        #self.logging.error("Updating function configuration of ArmoniK deployment is not supported")
-        #raise RuntimeError("Updating function configuration of ArmoniK deployment is not supported")
-        pass
+        self.create_function(code_package, function.name, True, f'{function.config.docker_image}:{function.config.docker_tag}')
 
     def download_metrics(
         self,
@@ -187,11 +212,11 @@ class ArmoniK(System):
         func_name = "{}-{}-{}".format(
             code_package.benchmark, code_package.language_name, code_package.language_version
         )
-        return func_name
+        return ArmoniK.format_function_name(func_name)
 
     @staticmethod
     def format_function_name(func_name: str) -> str:
-        return func_name
+        return f"function{func_name.replace('.', '').replace('-', '')}"
 
     def get_storage(self, replace_existing: bool = False) -> PersistentStorage:
         if not self.storage:
