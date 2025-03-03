@@ -3,8 +3,7 @@ import uuid
 from typing import List, Optional
 
 from armonik.client import ArmoniKResults
-from armonik.common import Result, Direction, ResultStatus
-from grpc import RpcError
+from armonik.common import ResultStatus
 
 from sebs.cache import Cache
 from sebs.faas.config import Resources
