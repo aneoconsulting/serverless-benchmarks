@@ -1,5 +1,6 @@
 import concurrent.futures
 import datetime
+import time
 import json
 from typing import List, Optional  # noqa
 
@@ -35,7 +36,7 @@ class LibraryTrigger(Trigger):
         return Trigger.TriggerType.LIBRARY
 
     def sync_invoke(self, payload: dict) -> ExecutionResult:
-        self.logging.info(f"Invoke function {self.name}.")
+        self.logging.info(f"Invoke function {self.func_name}.")
 
         task_client: ArmoniKTasks = self.deployment_client.task_client
         result_client: ArmoniKResults = self.deployment_client.result_client
@@ -46,13 +47,22 @@ class LibraryTrigger(Trigger):
         self.logging.info(f"Function invoked within session {session_id}.")
         self.logging.info(f"Using partition {self.func_name}.")
         task_options = TaskOptions(
-            partition_id=self.name,
+            partition_id=self.func_name,
             max_retries=0,
             max_duration=datetime.timedelta(seconds=self.timeout),
             priority=1
         )
 
-        input_blobs, output_blobs = self._get_blobs_from_payload(payload)
+        import uuid
+        payload["request-id"] = str(uuid.uuid4())
+
+        input_blobs, output_blobs = self._get_blobs_from_payload(
+            benchmark_name=self.func_name,
+            storage_client=storage_client,
+            payload=payload,
+            session_id=session_id,
+            result_client=result_client,
+        )
 
         request_body = result_client.create_results(results_data={"request_body": json.dumps(payload).encode("utf-8")}, session_id=session_id)["request_body"]
         response_body = result_client.create_results_metadata(result_names=["response_body"], session_id=session_id)["response_body"]
@@ -72,8 +82,8 @@ class LibraryTrigger(Trigger):
             session_id=session_id,
             tasks=[TaskDefinition(
                 payload_id=task_payload.result_id,
-                data_dependencies=[request_body.result_id] + [storage_client.result_ids[bucket][blob] for bucket, blob in input_blobs] if input_blobs else [],
-                expected_output_ids=[response_body.result_id] + [storage_client.result_ids[bucket][blob] for bucket, blob in output_blobs] if output_blobs else [],
+                data_dependencies=[request_body.result_id] + ([storage_client.result_ids[bucket][blob] for bucket, blob in input_blobs] if input_blobs else []),
+                expected_output_ids=[response_body.result_id] + ([storage_client.result_ids[bucket][blob] for bucket, blob in output_blobs] if output_blobs else []),
                 options=task_options,
             )],
         )[0]
@@ -82,17 +92,19 @@ class LibraryTrigger(Trigger):
         ret = json.loads(result_client.download_result_data(result_id=response_body.result_id, session_id=session_id).decode("utf-8"))
         end = datetime.datetime.now()
 
+        # Wait for the task status to be updated
+        time.sleep(4)
         func_task.refresh(task_client=task_client)
 
         armonik_result = ExecutionResult.from_times(begin, end)
         armonik_result.request_id = ret["request_id"]
         if func_task.status != TaskStatus.COMPLETED:
-            self.logging.error("Invocation of {} failed! Status {}.".format(self.name, func_task.status.name.lower()))
+            self.logging.error("Invocation of {} failed! Status {}.".format(self.func_name, TaskStatus(func_task.status).name.lower()))
             self.logging.error("Input: {}".format(payload))
             armonik_result.stats.failure = True
             return armonik_result
 
-        self.logging.debug(f"Invoke of function {self.name} was successful")
+        self.logging.debug(f"Invoke of function {self.func_name} was successful")
         armonik_result.parse_benchmark_output(ret)
 
         return armonik_result
@@ -103,17 +115,24 @@ class LibraryTrigger(Trigger):
         return fut
 
     def serialize(self) -> dict:
-        return {"type": "Library", "name": self.name}
+        return {"type": "Library", "name": self.func_name}
 
     @staticmethod
     def deserialize(obj: dict) -> Trigger:
         return LibraryTrigger(obj["name"])
 
     @staticmethod
-    def _get_blobs_from_payload(storage_client, payload: dict) -> tuple[List[tuple[str, str]],List[tuple[str, str]]]:
-        # bucket = payload["bucket"]["bucket"]
-        # input_blob = f"{payload['bucket']['input']}/{payload['object']['key']}"
-        # output_blob = f"{payload['bucket']['output']}/{payload['object']['key']}"
-        # storage_client.create_empty_object(bucket, output_blob)
-        # return [bucket, input_blob], [bucket, output_blob]
-        return [], []
+    def _get_blobs_from_payload(benchmark_name, storage_client, result_client, session_id, payload: dict) -> tuple[List[tuple[str, str]],List[tuple[str, str]]]:
+        ins = []
+        outs = []
+
+        if "clock" in benchmark_name or "network" in benchmark_name:
+            outs.append((payload["output-bucket"], 'results-{}.csv'.format(payload["request-id"])))
+
+        for bucket, blob in outs:
+            name = f"{bucket}/{blob}"
+            storage_client.result_ids[bucket][blob] = result_client.create_results_metadata(
+                result_names=[name],
+                session_id=session_id
+            )[name]
+        return ins, outs

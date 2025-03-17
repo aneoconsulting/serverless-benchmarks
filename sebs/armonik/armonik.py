@@ -135,8 +135,9 @@ class ArmoniK(System):
             config = hcl2.load(file)
             config["compute_plane"][function.name] = function.full_spec
 
-        with open(os.path.join(cmd_path, "parameters.tfvars"), "r+") as file:
-                file.write(hcl2.writes(hcl2.reverse_transform(config)))
+        with open(os.path.join(cmd_path, "parameters.tfvars"), "w") as file:
+            #file.write(json.dumps(config))
+            file.write(hcl2.writes(hcl2.reverse_transform(config)))
 
         self.logging.info("Updating ArmoniK deployment.")
         try:
@@ -155,7 +156,6 @@ class ArmoniK(System):
             ), "r") as file:
                 self.config._control_plane_url = json.loads(file.read())["armonik"]["control_plane_url"]
         except subprocess.CalledProcessError as e:
-            import pdb; pdb.set_trace()
             self.logging.error("Error executing makefile:", file=sys.stderr)
             self.logging.error(e.stdout, file=sys.stderr)
             self.logging.error(e.stderr, file=sys.stderr)
@@ -216,7 +216,7 @@ class ArmoniK(System):
 
     @staticmethod
     def format_function_name(func_name: str) -> str:
-        return f"function{func_name.replace('.', '').replace('-', '')}"
+        return f"f{func_name.replace('.', '').replace('-', '')}"
 
     def get_storage(self, replace_existing: bool = False) -> PersistentStorage:
         if not self.storage:

@@ -13,7 +13,7 @@ class ArmoniKFunctionConfig(FunctionConfig):
 
     # FIXME: merge with higher level abstraction for images
     docker_image: str = ""
-    docker_tage: str = ""
+    docker_tag: str = ""
 
     @staticmethod
     def deserialize(data: dict) -> ArmoniKFunctionConfig:

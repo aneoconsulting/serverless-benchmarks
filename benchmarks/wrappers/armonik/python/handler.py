@@ -6,7 +6,7 @@ import uuid
 
 
 def request_handler(req_id, req_json, income_timestamp):
-    req_json['request-id'] = req_id
+    # req_json['request-id'] = req_id
     req_json['income-timestamp'] = income_timestamp
     begin = datetime.datetime.now()
     # We are deployed in the same directorygit status
